@@ -9,7 +9,6 @@ import time
 import platform
 from pathlib import Path
 from typing import cast, TYPE_CHECKING, Optional, Callable, List, Any, Dict
-import requests
 
 import numpy
 from PyQt6.QtCore import QObject, QTimer, QUrl, QUrlQuery, pyqtSignal, pyqtProperty, QEvent, pyqtEnum, QCoreApplication, \
@@ -60,6 +59,7 @@ from cura import ApplicationMetadata
 from cura.API import CuraAPI
 from cura.API.Account import Account
 from cura.Arranging.ArrangeObjectsJob import ArrangeObjectsJob
+from cura.CuraRenderer import CuraRenderer
 from cura.Machines.MachineErrorChecker import MachineErrorChecker
 from cura.Machines.Models.BuildPlateModel import BuildPlateModel
 from cura.Machines.Models.CustomQualityProfilesDropDownMenuModel import CustomQualityProfilesDropDownMenuModel
@@ -102,6 +102,7 @@ from cura.Settings.MachineManager import MachineManager
 from cura.Settings.MachineNameValidator import MachineNameValidator
 from cura.Settings.MaterialSettingsVisibilityHandler import MaterialSettingsVisibilityHandler
 from cura.Settings.SettingInheritanceManager import SettingInheritanceManager
+from cura.Settings.TabbedSettingsManager import TabbedSettingsManager
 from cura.Settings.SidebarCustomMenuItemsModel import SidebarCustomMenuItemsModel
 from cura.Settings.SimpleModeSettingsManager import SimpleModeSettingsManager
 from cura.TaskManagement.OnExitCallbackManager import OnExitCallbackManager
@@ -110,10 +111,12 @@ from cura.UI.MachineActionManager import MachineActionManager
 from cura.UI.AddPrinterPagesModel import AddPrinterPagesModel
 from cura.UI.MachineSettingsManager import MachineSettingsManager
 from cura.UI.ObjectsModel import ObjectsModel
+from cura.UI.OpenSourceDependenciesModel import OpenSourceDependenciesModel
 from cura.UI.RecommendedMode import RecommendedMode
 from cura.UI.TextManager import TextManager
 from cura.UI.WelcomePagesModel import WelcomePagesModel
 from cura.UI.WhatsNewPagesModel import WhatsNewPagesModel
+from cura.UI.WhatsNewSubPagesModel import WhatsNewSubPagesModel
 from cura.UltimakerCloud import UltimakerCloudConstants
 from cura.Utils.NetworkingUtil import NetworkingUtil
 from . import BuildVolume
@@ -139,7 +142,7 @@ class CuraApplication(QtApplication):
     # SettingVersion represents the set of settings available in the machine/extruder definitions.
     # You need to make sure that this version number needs to be increased if there is any non-backwards-compatible
     # changes of the settings.
-    SettingVersion = 23
+    SettingVersion = 27
 
     Created = False
 
@@ -173,8 +176,8 @@ class CuraApplication(QtApplication):
 
         self.default_theme = "cura-light"
 
-        self.change_log_url = "https://ultimaker.com/ultimaker-cura-latest-features?utm_source=cura&utm_medium=software&utm_campaign=cura-update-features"
-        self.beta_change_log_url = "https://ultimaker.com/ultimaker-cura-beta-features?utm_source=cura&utm_medium=software&utm_campaign=cura-update-features"
+        self.change_log_url = "https://ultimaker.com/ultimaker-cura-latest-features"
+        self.beta_change_log_url = "https://ultimaker.com/ultimaker-cura-beta-features"
 
         self._boot_loading_time = time.time()
 
@@ -187,6 +190,7 @@ class CuraApplication(QtApplication):
 
         self._single_instance = None
         self._open_project_mode: Optional[str] = None
+        self._read_operation_is_project_file: Optional[bool] = None
 
         self._cura_formula_functions = None  # type: Optional[CuraFormulaFunctions]
 
@@ -214,6 +218,7 @@ class CuraApplication(QtApplication):
         self._setting_visibility_presets_model = None
         self._setting_inheritance_manager = None
         self._simple_mode_settings_manager = None
+        self._tabbed_settings_manager = None
         self._cura_scene_controller = None
         self._machine_error_checker = None
 
@@ -226,10 +231,6 @@ class CuraApplication(QtApplication):
         self._discovered_printer_model = DiscoveredPrintersModel(self, parent = self)
         self._discovered_cloud_printers_model = DiscoveredCloudPrintersModel(self, parent = self)
         self._first_start_machine_actions_model = None
-        self._welcome_pages_model = WelcomePagesModel(self, parent = self)
-        self._add_printer_pages_model = AddPrinterPagesModel(self, parent = self)
-        self._add_printer_pages_model_without_cancel = AddPrinterPagesModel(self, parent = self)
-        self._whats_new_pages_model = WhatsNewPagesModel(self, parent = self)
         self._text_manager = TextManager(parent = self)
 
         self._quality_profile_drop_down_menu_model = None
@@ -283,6 +284,8 @@ class CuraApplication(QtApplication):
         self._python_installs = ApplicationMetadata.PYTHON_INSTALLS
 
         self._supported_url_schemes: List[str] = ["cura", "slicer"]
+
+        self._confirm_exit_dialog_callback: Optional[Callable[[bool], None]] = None
 
     @pyqtProperty(str, constant=True)
     def ultimakerCloudApiRootUrl(self) -> str:
@@ -359,6 +362,9 @@ class CuraApplication(QtApplication):
 
         self._machine_action_manager = MachineActionManager(self)
         self._machine_action_manager.initialize()
+
+    def makeRenderer(self) -> CuraRenderer:
+        return CuraRenderer(self)
 
     def __sendCommandToSingleInstance(self):
         self._single_instance = SingleInstance(self, self._files_to_open, self._urls_to_open)
@@ -561,7 +567,9 @@ class CuraApplication(QtApplication):
 
         super().startSplashWindowPhase()
 
-        if not self.getIsHeadLess():
+        # On macOS the .app bundle's CFBundleIconFile owns the dock icon; overriding it at runtime
+        # causes the dock to show the PNG instead of the properly-sized .icns.
+        if not self.getIsHeadLess() and sys.platform != "darwin":
             try:
                 self.setWindowIcon(QIcon(Resources.getPath(Resources.Images, "cura-icon.png" if not ApplicationMetadata.IsAlternateVersion else "cura-icon_wip.png")))
             except FileNotFoundError:
@@ -637,6 +645,8 @@ class CuraApplication(QtApplication):
             "dialog_material_path"]:
 
             preferences.addPreference("local_file/%s" % key, os.path.expanduser("~/"))
+
+        preferences.addPreference("local_file/use_fixed_dialog_paths", False)
 
         preferences.setDefault("local_file/last_used_type", "text/x-gcode")
 
@@ -715,12 +725,13 @@ class CuraApplication(QtApplication):
 
     showConfirmExitDialog = pyqtSignal(str, arguments = ["message"])
 
-    def setConfirmExitDialogCallback(self, callback: Callable) -> None:
+    def setConfirmExitDialogCallback(self, callback: Optional[Callable[[bool], None]]) -> None:
         self._confirm_exit_dialog_callback = callback
 
     @pyqtSlot(bool)
     def callConfirmExitDialogCallback(self, yes_or_no: bool) -> None:
-        self._confirm_exit_dialog_callback(yes_or_no)
+        if self._confirm_exit_dialog_callback is not None:
+            self._confirm_exit_dialog_callback(yes_or_no)
 
     showPreferencesWindow = pyqtSignal()
     """Signal to connect preferences action in QML"""
@@ -768,7 +779,10 @@ class CuraApplication(QtApplication):
     def discardOrKeepProfileChanges(self) -> bool:
         has_user_interaction = False
         choice = self.getPreferences().getValue("cura/choice_on_profile_override")
-        if choice == "always_discard":
+        if self.getloadingWorkspace():
+            # opening from a file; don't show dialog and KEEP the profile
+            self.discardOrKeepProfileChangesClosed("keep")
+        elif choice == "always_discard":
             # don't show dialog and DISCARD the profile
             self.discardOrKeepProfileChangesClosed("discard")
         elif choice == "always_keep":
@@ -920,10 +934,6 @@ class CuraApplication(QtApplication):
         self._cura_API.initialize()
         self.processEvents()
         self._output_device_manager.start()
-        self._welcome_pages_model.initialize()
-        self._add_printer_pages_model.initialize()
-        self._add_printer_pages_model_without_cancel.initialize(cancellable = False)
-        self._whats_new_pages_model.initialize()
 
         # Initialize the FileProviderModel
         self._file_provider_model.initialize(self._onFileProviderEnabledChanged)
@@ -1033,7 +1043,6 @@ class CuraApplication(QtApplication):
 
         # Initialize UI state
         controller.setActiveStage("PrepareStage")
-        controller.setActiveView("SolidView")
         controller.setCameraTool("CameraTool")
         controller.setSelectionTool("SelectionTool")
 
@@ -1060,21 +1069,25 @@ class CuraApplication(QtApplication):
     def getSettingVisibilityPresetsModel(self, *args) -> SettingVisibilityPresetsModel:
         return self._setting_visibility_presets_model
 
+    @deprecated("This should no more be called, you should directly create a new model instead", since="5.14.0")
     @pyqtSlot(result = QObject)
     def getWelcomePagesModel(self, *args) -> "WelcomePagesModel":
-        return self._welcome_pages_model
+        return WelcomePagesModel()
 
+    @deprecated("This should no more be called, you should directly create a new model instead", since="5.14.0")
     @pyqtSlot(result = QObject)
     def getAddPrinterPagesModel(self, *args) -> "AddPrinterPagesModel":
-        return self._add_printer_pages_model
+        return AddPrinterPagesModel()
 
+    @deprecated("This should no more be called, you should directly create a new model instead", since="5.14.0")
     @pyqtSlot(result = QObject)
     def getAddPrinterPagesModelWithoutCancel(self, *args) -> "AddPrinterPagesModel":
-        return self._add_printer_pages_model_without_cancel
+        return AddPrinterPagesModel()
 
+    @deprecated("This should no more be called, you should directly create a new model instead", since="5.14.0")
     @pyqtSlot(result = QObject)
     def getWhatsNewPagesModel(self, *args) -> "WhatsNewPagesModel":
-        return self._whats_new_pages_model
+        return WhatsNewPagesModel()
 
     @pyqtSlot(result = QObject)
     def getMachineSettingsManager(self, *args) -> "MachineSettingsManager":
@@ -1288,6 +1301,8 @@ class CuraApplication(QtApplication):
         engine.rootContext().setContextProperty("PrintInformation", self._print_information)
         engine.rootContext().setContextProperty("CuraActions", self._cura_actions)
         engine.rootContext().setContextProperty("CuraSDKVersion", ApplicationMetadata.CuraSDKVersion)
+        self._tabbed_settings_manager = TabbedSettingsManager(machine_manager=self.getMachineManager(), parent=self)
+        engine.rootContext().setContextProperty("TabbedSettingsManager", self._tabbed_settings_manager)
 
         self.processEvents()
         qmlRegisterUncreatableMetaObject(CuraApplication.staticMetaObject, "Cura", 1, 0, "ResourceTypes", "ResourceTypes is an enum-only type")
@@ -1296,6 +1311,7 @@ class CuraApplication(QtApplication):
         qmlRegisterSingletonType(CuraSceneController, "Cura", 1, 0, self.getCuraSceneController, "SceneController")
         qmlRegisterSingletonType(ExtruderManager, "Cura", 1, 0, self.getExtruderManager, "ExtruderManager")
         qmlRegisterSingletonType(MachineManager, "Cura", 1, 0, self.getMachineManager, "MachineManager")
+        qmlRegisterSingletonType(MachineErrorChecker, "Cura", 1, 0, self.getMachineErrorChecker, "MachineErrorChecker")
         qmlRegisterSingletonType(IntentManager, "Cura", 1, 6, self.getIntentManager, "IntentManager")
         qmlRegisterSingletonType(SettingInheritanceManager, "Cura", 1, 0, self.getSettingInheritanceManager, "SettingInheritanceManager")
         qmlRegisterSingletonType(SimpleModeSettingsManager, "Cura", 1, 0, self.getSimpleModeSettingsManagerWrapper, "SimpleModeSettingsManager")
@@ -1305,9 +1321,11 @@ class CuraApplication(QtApplication):
         qmlRegisterType(NetworkingUtil, "Cura", 1, 5, "NetworkingUtil")
         qmlRegisterType(WelcomePagesModel, "Cura", 1, 0, "WelcomePagesModel")
         qmlRegisterType(WhatsNewPagesModel, "Cura", 1, 0, "WhatsNewPagesModel")
+        qmlRegisterType(WhatsNewSubPagesModel, "Cura", 1, 0, "WhatsNewSubPagesModel")
         qmlRegisterType(AddPrinterPagesModel, "Cura", 1, 0, "AddPrinterPagesModel")
         qmlRegisterType(TextManager, "Cura", 1, 0, "TextManager")
         qmlRegisterType(RecommendedMode, "Cura", 1, 0, "RecommendedMode")
+        qmlRegisterType(OpenSourceDependenciesModel, "Cura", 1, 0, "OpenSourceDependenciesModel")
 
         self.processEvents()
         qmlRegisterType(NetworkMJPGImage, "Cura", 1, 0, "NetworkMJPGImage")
@@ -1580,7 +1598,13 @@ class CuraApplication(QtApplication):
             if node.callDecoration("getBuildPlateNumber") == active_build_plate:
                 # Skip nodes that are too big
                 bounding_box = node.getBoundingBox()
-                if bounding_box is None or bounding_box.width < self._volume.getBoundingBox().width or bounding_box.depth < self._volume.getBoundingBox().depth:
+                volume_bounding_box = self._volume.getBoundingBox()
+                if volume_bounding_box is None:
+                    Logger.warning("_arrangeAll: build volume bounding box is None — rebuild not yet triggered. Requesting rebuild and aborting arrange.")
+                    # Trigger a rebuild now and bail out; the user can retry arrange once the volume is ready.
+                    self._volume.rebuild()
+                    return
+                if bounding_box is None or bounding_box.width < volume_bounding_box.width or bounding_box.depth < volume_bounding_box.depth:
                     # Arrange only the unlocked nodes and keep the locked ones in place
                     if node.getSetting(SceneNodeSettings.LockPosition):
                         locked_nodes.append(node)
@@ -1642,14 +1666,10 @@ class CuraApplication(QtApplication):
                     Logger.log("w", "Unable to reload data because we don't have a filename.")
 
         for file_name, nodes in objects_in_filename.items():
-            file_path = os.path.normpath(os.path.dirname(file_name))
-            job = ReadMeshJob(file_name,
-                              add_to_recent_files=file_path != tempfile.gettempdir())  # Don't add temp files to the recent files list
-            job._nodes = nodes  # type: ignore
-            job.finished.connect(self._reloadMeshFinished)
+            on_done = None
             if has_merged_nodes:
-                job.finished.connect(self.updateOriginOfMergedMeshes)
-            job.start()
+                on_done = self.updateOriginOfMergedMeshes
+            self.getController().getScene().reloadNodes(nodes, file_name, on_done)
 
     @pyqtSlot("QStringList")
     def setExpandedCategories(self, categories: List[str]) -> None:
@@ -1832,53 +1852,6 @@ class CuraApplication(QtApplication):
     fileLoaded = pyqtSignal(str)
     fileCompleted = pyqtSignal(str)
 
-    def _reloadMeshFinished(self, job) -> None:
-        """
-        Function called when ReadMeshJob finishes reloading a file in the background, then update node objects in the
-        scene from its source file. The function gets all the nodes that exist in the file through the job result, and
-        then finds the scene nodes that need to be refreshed by their name. Each job refreshes all nodes of a file.
-        Nodes that are not present in the updated file are kept in the scene.
-
-        :param job: The :py:class:`Uranium.UM.ReadMeshJob.ReadMeshJob` running in the background that reads all the
-        meshes in a file
-        """
-
-        job_result = job.getResult()  # nodes that exist inside the file read by this job
-        if len(job_result) == 0:
-            Logger.log("e", "Reloading the mesh failed.")
-            return
-        renamed_nodes = {} # type: Dict[str, int]
-        # Find the node to be refreshed based on its id
-        for job_result_node in job_result:
-            mesh_data = job_result_node.getMeshData()
-            if not mesh_data:
-                Logger.log("w", "Could not find a mesh in reloaded node.")
-                continue
-
-            # Solves issues with object naming
-            result_node_name = job_result_node.getName()
-            if not result_node_name:
-                result_node_name = os.path.basename(mesh_data.getFileName())
-            if result_node_name in renamed_nodes:  # objects may get renamed by ObjectsModel._renameNodes() when loaded
-                renamed_nodes[result_node_name] += 1
-                result_node_name = "{0}({1})".format(result_node_name, renamed_nodes[result_node_name])
-            else:
-                renamed_nodes[job_result_node.getName()] = 0
-
-            # Find the matching scene node to replace
-            scene_node = None
-            for replaced_node in job._nodes:
-                if replaced_node.getName() == result_node_name:
-                    scene_node = replaced_node
-                    break
-
-            if scene_node:
-                scene_node.setMeshData(mesh_data)
-            else:
-                # Current node is a new one in the file, or it's name has changed
-                # TODO: Load this mesh into the scene. Also alter the "_reloadJobFinished" action in UM.Scene
-                Logger.log("w", "Could not find matching node for object '{0}' in the scene.".format(result_node_name))
-
     def _openFile(self, filename):
         self.readLocalFile(QUrl.fromLocalFile(filename))
 
@@ -1892,39 +1865,39 @@ class CuraApplication(QtApplication):
                 query = QUrlQuery(url.query())
                 model_url = QUrl(query.queryItemValue("file", options=QUrl.ComponentFormattingOption.FullyDecoded))
 
-                def on_finish(response):
-                    content_disposition_header_key = QByteArray("content-disposition".encode())
-
-                    if not response.hasRawHeader(content_disposition_header_key):
-                        Logger.log("w", "Could not find Content-Disposition header in response from {0}".format(
-                            model_url.url()))
-                        # Use the last part of the url as the filename, and assume it is an STL file
-                        filename = model_url.path().split("/")[-1] + ".stl"
-                    else:
-                        # content_disposition is in the format
-                        # ```
-                        # content_disposition attachment; "filename=[FILENAME]"
-                        # ```
-                        # Use a regex to extract the filename
-                        content_disposition = str(response.rawHeader(content_disposition_header_key).data(),
-                                                  encoding='utf-8')
-                        content_disposition_match = re.match(r'attachment; filename="(?P<filename>.*)"',
-                                                             content_disposition)
-                        assert content_disposition_match is not None
-                        filename = content_disposition_match.group("filename")
-
-                    tmp = tempfile.NamedTemporaryFile(suffix=filename, delete=False)
-                    with open(tmp.name, "wb") as f:
-                        f.write(response.readAll())
-
-                    self.readLocalFile(QUrl.fromLocalFile(tmp.name), add_to_recent_files=False)
-
                 def on_error(*args, **kwargs):
-                    Logger.log("w", "Could not download file from {0}".format(model_url.url()))
-                    Message("Could not download file: " + str(model_url.url()),
+                    Logger.warning(f"Could not download file from {model_url.url()}")
+                    Message(f"Could not download file: {str(model_url.url())}",
                             title= "Loading Model failed",
                             message_type=Message.MessageType.ERROR).show()
-                    return
+
+                def on_finish(response):
+                    try:
+                        content_disposition_header_key = QByteArray("content-disposition".encode())
+
+                        filename = model_url.path().split("/")[-1] + ".stl"
+
+                        if response.hasRawHeader(content_disposition_header_key):
+                            # content_disposition is in the format
+                            # ```
+                            # content_disposition attachment; filename="[FILENAME]"
+                            # ```
+                            # Use a regex to extract the filename
+                            content_disposition = str(response.rawHeader(content_disposition_header_key).data(),
+                                                      encoding='utf-8')
+                            content_disposition_match = re.match(r'attachment; filename=(?P<filename>.*)',
+                                                                 content_disposition)
+                            if content_disposition_match is not None:
+                                filename = content_disposition_match.group("filename").strip("\"")
+
+                        tmp = tempfile.NamedTemporaryFile(suffix=filename, delete=False)
+                        with open(tmp.name, "wb") as f:
+                            f.write(response.readAll())
+
+                        self.readLocalFile(QUrl.fromLocalFile(tmp.name), add_to_recent_files=False)
+                    except Exception as ex:
+                        Logger.warning(f"Exception {str(ex)}")
+                        on_error()
 
                 self.getHttpRequestManager().get(
                     model_url.url(),
@@ -2016,18 +1989,18 @@ class CuraApplication(QtApplication):
                 self.deleteAll()
                 break
 
-        is_project_file = self.checkIsValidProjectFile(file)
+        self._read_operation_is_project_file = self.checkIsValidProjectFile(file)
 
         if self._open_project_mode is None:
             self._open_project_mode = self.getPreferences().getValue("cura/choice_on_open_project")
 
-        if is_project_file and self._open_project_mode == "open_as_project":
+        if self._read_operation_is_project_file and self._open_project_mode == "open_as_project":
             # open as project immediately without presenting a dialog
             workspace_handler = self.getWorkspaceFileHandler()
             workspace_handler.readLocalFile(file, add_to_recent_files_hint = add_to_recent_files)
             return
 
-        if is_project_file and self._open_project_mode == "always_ask":
+        if self._read_operation_is_project_file and self._open_project_mode == "always_ask":
             # present a dialog asking to open as project or import models
             self.callLater(self.openProjectFile.emit, file, add_to_recent_files)
             return
@@ -2134,9 +2107,7 @@ class CuraApplication(QtApplication):
             is_non_sliceable = "." + file_extension in self._non_sliceable_extensions
 
             if is_non_sliceable:
-                # Need to switch first to the preview stage and then to layer view
-                self.callLater(lambda: (self.getController().setActiveStage("PreviewStage"),
-                                        self.getController().setActiveView("SimulationView")))
+                self.callLater(lambda: (self.getController().setActiveStage("PreviewStage")))
 
                 block_slicing_decorator = BlockSlicingDecorator()
                 node.addDecorator(block_slicing_decorator)
@@ -2165,7 +2136,7 @@ class CuraApplication(QtApplication):
                     nodes_to_arrange.append(node)
             # If the file is a project,and models are to be loaded from a that project,
             # models inside file should be arranged in buildplate.
-            elif self._open_project_mode == "open_as_model":
+            elif self._read_operation_is_project_file and self._open_project_mode == "open_as_model":
                 nodes_to_arrange.append(node)
 
             # This node is deep copied from some other node which already has a BuildPlateDecorator, but the deepcopy

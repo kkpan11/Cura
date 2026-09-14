@@ -168,6 +168,23 @@ Item
                 // I don't remember exactly what.
                 afterOnEditingFinishedFunction: manager.updateHasMaterialsMetadata
             }
+
+			Cura.NumericTextFieldWithUnit  // "Print Time Estimation Factor"
+            {
+                id: machineTimeEstimationFactorField
+                containerStackId: machineStackId
+                settingKey: "machine_time_estimation_factor"
+                settingStoreIndex: propertyStoreIndex
+                labelText: catalog.i18nc("@label", "Print Time Estimation Factor")
+                labelFont: base.labelFont
+                labelWidth: base.labelWidth
+                controlWidth: base.controlWidth
+                unitText: catalog.i18nc("@label", "%")
+                decimals: 1
+                minimum: 1
+                maximum: 1000
+                forceUpdateOnChangeFunction: forceUpdateFunction
+            }
         }
 
         // =======================================
@@ -214,7 +231,7 @@ Item
 
                 settingStoreIndex: propertyStoreIndex
 
-                labelText: catalog.i18nc("@label", "Y min")
+                labelText: catalog.i18nc("@label", "Y min ( '-' towards back)")
                 labelFont: base.labelFont
                 labelWidth: base.labelWidth
                 controlWidth: base.controlWidth
@@ -254,7 +271,7 @@ Item
                 settingKey: "machine_head_with_fans_polygon"
                 settingStoreIndex: propertyStoreIndex
 
-                labelText: catalog.i18nc("@label", "Y max")
+                labelText: catalog.i18nc("@label", "Y max ( '+' towards front)")
                 labelFont: base.labelFont
                 labelWidth: base.labelWidth
                 controlWidth: base.controlWidth
@@ -340,6 +357,21 @@ Item
                 settingKey: "machine_use_extruder_offset_to_offset_coords"
                 settingStoreIndex: propertyStoreIndex
                 labelText: catalog.i18nc("@label", "Apply Extruder offsets to GCode")
+                labelFont: base.labelFont
+                labelWidth: base.labelWidth
+                forceUpdateOnChangeFunction: forceUpdateFunction
+            }
+
+            /* 
+               - Allows user to toggle if Start Gcode is the absolute first gcode.
+            */
+            Cura.SimpleCheckBox  // "Make sure Start Code is before all gcodes"
+            {
+                id: applyStartGcodeFirstCheckbox
+                containerStackId: machineStackId
+                settingKey: "machine_start_gcode_first"
+                settingStoreIndex: propertyStoreIndex
+                labelText: catalog.i18nc("@label", "Start GCode must be first")
                 labelFont: base.labelFont
                 labelWidth: base.labelWidth
                 forceUpdateOnChangeFunction: forceUpdateFunction

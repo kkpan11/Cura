@@ -46,6 +46,14 @@ class SimulationViewProxy(QObject):
     def minimumLayer(self):
         return self._simulation_view.getMinimumLayer()
 
+    @pyqtProperty(float, notify=currentLayerChanged)
+    def currentLayerHeight(self):
+        return self._simulation_view.getCurrentLayerHeight()
+
+    @pyqtProperty(float, notify=currentLayerChanged)
+    def minimumLayerHeight(self):
+        return self._simulation_view.getMinimumLayerHeight()
+
     @pyqtProperty(int, notify=maxPathsChanged)
     def numPaths(self):
         return self._simulation_view.getMaxPaths()
@@ -54,9 +62,9 @@ class SimulationViewProxy(QObject):
     def currentPath(self):
         return self._simulation_view.getCurrentPath()
 
-    @pyqtSlot(float, result=bool)
-    def advanceTime(self, duration: float) -> bool:
-        return self._simulation_view.advanceTime(duration)
+    @pyqtSlot(float)
+    def advanceTime(self, duration: float) -> None:
+        self._simulation_view.advanceTime(duration)
 
     @pyqtProperty(int, notify=currentPathChanged)
     def minimumPath(self):

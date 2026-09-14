@@ -67,39 +67,40 @@ class SimulationPass(RenderPass):
         if not self._compatibility_mode:
             self._layer_shader.setUniformValue("u_starts_color", Color(*Application.getInstance().getTheme().getColor("layerview_starts").getRgb()))
 
-        if self._layer_view:
-            self._layer_shader.setUniformValue("u_max_feedrate", self._layer_view.getMaxFeedrate())
-            self._layer_shader.setUniformValue("u_min_feedrate", self._layer_view.getMinFeedrate())
-            self._layer_shader.setUniformValue("u_max_thickness", self._layer_view.getMaxThickness())
-            self._layer_shader.setUniformValue("u_min_thickness", self._layer_view.getMinThickness())
-            self._layer_shader.setUniformValue("u_max_line_width", self._layer_view.getMaxLineWidth())
-            self._layer_shader.setUniformValue("u_min_line_width", self._layer_view.getMinLineWidth())
-            self._layer_shader.setUniformValue("u_max_flow_rate", self._layer_view.getMaxFlowRate())
-            self._layer_shader.setUniformValue("u_min_flow_rate", self._layer_view.getMinFlowRate())
-            self._layer_shader.setUniformValue("u_layer_view_type", self._layer_view.getSimulationViewType())
-            self._layer_shader.setUniformValue("u_extruder_opacity", self._layer_view.getExtruderOpacities())
-            self._layer_shader.setUniformValue("u_show_travel_moves", self._layer_view.getShowTravelMoves())
-            self._layer_shader.setUniformValue("u_show_helpers", self._layer_view.getShowHelpers())
-            self._layer_shader.setUniformValue("u_show_skin", self._layer_view.getShowSkin())
-            self._layer_shader.setUniformValue("u_show_infill", self._layer_view.getShowInfill())
-            self._layer_shader.setUniformValue("u_show_starts", self._layer_view.getShowStarts())
-        else:
-            #defaults
-            self._layer_shader.setUniformValue("u_max_feedrate", 1)
-            self._layer_shader.setUniformValue("u_min_feedrate", 0)
-            self._layer_shader.setUniformValue("u_max_thickness", 1)
-            self._layer_shader.setUniformValue("u_min_thickness", 0)
-            self._layer_shader.setUniformValue("u_max_flow_rate", 1)
-            self._layer_shader.setUniformValue("u_min_flow_rate", 0)
-            self._layer_shader.setUniformValue("u_max_line_width", 1)
-            self._layer_shader.setUniformValue("u_min_line_width", 0)
-            self._layer_shader.setUniformValue("u_layer_view_type", 1)
-            self._layer_shader.setUniformValue("u_extruder_opacity", [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1]])
-            self._layer_shader.setUniformValue("u_show_travel_moves", 0)
-            self._layer_shader.setUniformValue("u_show_helpers", 1)
-            self._layer_shader.setUniformValue("u_show_skin", 1)
-            self._layer_shader.setUniformValue("u_show_infill", 1)
-            self._layer_shader.setUniformValue("u_show_starts", 1)
+        for shader in [self._layer_shader, self._layer_shadow_shader]:
+            if self._layer_view:
+                shader.setUniformValue("u_max_feedrate", self._layer_view.getMaxFeedrate())
+                shader.setUniformValue("u_min_feedrate", self._layer_view.getMinFeedrate())
+                shader.setUniformValue("u_max_thickness", self._layer_view.getMaxThickness())
+                shader.setUniformValue("u_min_thickness", self._layer_view.getMinThickness())
+                shader.setUniformValue("u_max_line_width", self._layer_view.getMaxLineWidth())
+                shader.setUniformValue("u_min_line_width", self._layer_view.getMinLineWidth())
+                shader.setUniformValue("u_max_flow_rate", self._layer_view.getMaxFlowRate())
+                shader.setUniformValue("u_min_flow_rate", self._layer_view.getMinFlowRate())
+                shader.setUniformValue("u_layer_view_type", self._layer_view.getSimulationViewType())
+                shader.setUniformValue("u_extruder_opacity", self._layer_view.getExtruderOpacities())
+                shader.setUniformValue("u_show_travel_moves", self._layer_view.getShowTravelMoves())
+                shader.setUniformValue("u_show_helpers", self._layer_view.getShowHelpers())
+                shader.setUniformValue("u_show_skin", self._layer_view.getShowSkin())
+                shader.setUniformValue("u_show_infill", self._layer_view.getShowInfill())
+                shader.setUniformValue("u_show_starts", self._layer_view.getShowStarts())
+            else:
+                #defaults
+                shader.setUniformValue("u_max_feedrate", 1)
+                shader.setUniformValue("u_min_feedrate", 0)
+                shader.setUniformValue("u_max_thickness", 1)
+                shader.setUniformValue("u_min_thickness", 0)
+                shader.setUniformValue("u_max_flow_rate", 1)
+                shader.setUniformValue("u_min_flow_rate", 0)
+                shader.setUniformValue("u_max_line_width", 1)
+                shader.setUniformValue("u_min_line_width", 0)
+                shader.setUniformValue("u_layer_view_type", 1)
+                shader.setUniformValue("u_extruder_opacity", [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1]])
+                shader.setUniformValue("u_show_travel_moves", 0)
+                shader.setUniformValue("u_show_helpers", 1)
+                shader.setUniformValue("u_show_skin", 1)
+                shader.setUniformValue("u_show_infill", 1)
+                shader.setUniformValue("u_show_starts", 1)
 
         if not self._tool_handle_shader:
             self._tool_handle_shader = OpenGL.getInstance().createShaderProgram(Resources.getPath(Resources.Shaders, "toolhandle.shader"))
@@ -132,7 +133,8 @@ class SimulationPass(RenderPass):
                 nozzle_node = node
                 nozzle_node.setVisible(False)  # Don't set to true, we render it separately!
 
-            elif getattr(node, "_outside_buildarea", False) and isinstance(node, SceneNode) and node.getMeshData() and node.isVisible() and not node.callDecoration("isNonPrintingMesh"):
+            elif ((getattr(node, "_outside_buildarea", False) or node.callDecoration("isAssignedToDisabledExtruder")) and
+                  isinstance(node, SceneNode) and node.getMeshData() and node.isVisible() and not node.callDecoration("isNonPrintingMesh")):
                 disabled_batch.addItem(node.getWorldTransformation(copy=False), node.getMeshData())
 
             elif isinstance(node, SceneNode) and (node.getMeshData() or node.callDecoration("isBlockSlicing")) and node.isVisible():
@@ -149,9 +151,9 @@ class SimulationPass(RenderPass):
                     vertex_distance_ratio = 0.0
                     towards_next_vertex = 0
                     element_counts = layer_data.getElementCounts()
-                    for layer in sorted(element_counts.keys()):
+                    for layer in element_counts.keys():
                         # In the current layer, we show just the indicated paths
-                        if layer == self._layer_view._current_layer_num:
+                        if layer == self._layer_view.getCurrentLayer():
                             # We look for the position of the head, searching the point of the current path
                             index = int(self._layer_view.getCurrentPath()) if not math.isnan(
                                 self._layer_view.getCurrentPath()) else 0
@@ -179,10 +181,12 @@ class SimulationPass(RenderPass):
                                     vertex_after_head = pos_b
                                     towards_next_vertex = 2  # Add two to the index to print the current and next vertices as an 'unfinished' line (to the nozzle).
                                 break
-                            break
-                        if self._layer_view.getMinimumLayer() > layer:
+
+                        if layer < self._layer_view.getMinimumLayer():
                             start += element_counts[layer]
-                        end += element_counts[layer]
+
+                        if layer < self._layer_view.getCurrentLayer():
+                            end += element_counts[layer]
 
                     # Calculate the range of paths in the last layer
                     current_layer_start = end
@@ -202,9 +206,9 @@ class SimulationPass(RenderPass):
                     self._layer_shader.setUniformValue("u_next_vertex", not_a_vector)
                     self._layer_shader.setUniformValue("u_last_line_ratio", 1.0)
 
-                    # The first line does not have a previous line: add a MoveCombingType in front for start detection
+                    # The first line does not have a previous line: add a MoveUnretractedType in front for start detection
                     # this way the first start of the layer can also be drawn
-                    prev_line_types = numpy.concatenate([numpy.asarray([LayerPolygon.MoveCombingType], dtype = numpy.float32), layer_data._attributes["line_types"]["value"]])
+                    prev_line_types = numpy.concatenate([numpy.asarray([LayerPolygon.MoveUnretractedType], dtype = numpy.float32), layer_data._attributes["line_types"]["value"]])
                     # Remove the last element
                     prev_line_types = prev_line_types[0:layer_data._attributes["line_types"]["value"].size]
                     layer_data._attributes["prev_line_types"] =  {'opengl_type': 'float', 'value': prev_line_types, 'opengl_name': 'a_prev_line_type'}

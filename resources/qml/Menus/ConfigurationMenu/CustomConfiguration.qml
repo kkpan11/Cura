@@ -18,6 +18,12 @@ Item
         name: "cura"
     }
 
+    UM.I18nCatalog
+    {
+        id: catalog_fdmprinter
+        name: "fdmprinter.def.json"
+    }
+
     width: parent.width
     height: childrenRect.height
 
@@ -43,6 +49,7 @@ Item
         anchors.top: header.bottom
         anchors.topMargin: UM.Theme.getSize("default_margin").height
         visible: extrudersModel.count > 1
+        z: 1 // Render above the content rectangle so the active tab can cover its top border
 
         Repeater
         {
@@ -281,7 +288,7 @@ Item
 
                 UM.Label
                 {
-                    text: Cura.MachineManager.activeDefinitionVariantsName
+                    text: catalog_fdmprinter.i18nc("variant_name", Cura.MachineManager.activeDefinitionVariantsName)
                     height: parent.height
                     width: selectors.textWidth
                 }
